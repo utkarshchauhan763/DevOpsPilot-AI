@@ -1,11 +1,11 @@
 const express = require("express");
+const sendResponse = require("../utils/response");
 const router = express.Router();
 
 router.get("/",(req,res) => {
-    res.status(200).json({
-        success: true,
-        message: "DevOpsPilot AI is running",
-        status: "healthy"
+    return sendResponse(res,200,"Health Check Successful", {
+        status: "healthy",
+        service: "DevOps Pilot AI"
     });
 });
 
