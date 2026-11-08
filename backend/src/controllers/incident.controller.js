@@ -36,12 +36,16 @@ const createIncident = async(req,res,next) => {
 };
 
 
+
 const getIncidents = async (req, res, next) => {
     try {
         const {
             severity,
             status,
             service,
+            search,
+            startDate,
+            endDate,
             page = 1,
             limit = 10,
             sortBy = "createdAt",
@@ -77,15 +81,19 @@ const getIncidents = async (req, res, next) => {
             pageSize < 1 ||
             pageSize > 100
         ) {
-            const error = new Error(
-                "Page must be a positive integer and limit must be between 1 and 100"
-            );
+            const error = new Error("Invalid pagination parameters");
             error.statusCode = 400;
             throw error;
         }
 
         // 4. Validate sorting
-        const allowedSortFields = ["createdAt", "updatedAt", "severity", "title"];
+        const allowedSortFields = [
+            "createdAt",
+            "updatedAt",
+            "severity",
+            "title"
+        ];
+
         const allowedOrders = ["asc", "desc"];
 
         if (!allowedSortFields.includes(sortBy)) {
@@ -100,10 +108,9 @@ const getIncidents = async (req, res, next) => {
             throw error;
         }
 
-        // 5. Build filters
+        // 5. Build ownership and filter conditions
         const filters = {};
 
-        // Normal users can only see their own incidents
         if (req.user.role !== "admin") {
             filters.createdBy = req.user.userId;
         }
@@ -118,10 +125,95 @@ const getIncidents = async (req, res, next) => {
             };
         }
 
-        // 6. Calculate pagination
+        // 6. Keyword search across multiple fields
+        if (search) {
+            const escapedSearch = search.replace(
+                /[.*+?^${}()|[\]\\]/g,
+                "\\$&"
+            );
+
+            const searchRegex = {
+                $regex: escapedSearch,
+                $options: "i"
+            };
+
+            filters.$or = [
+                { title: searchRegex },
+                { description: searchRegex },
+                { logs: searchRegex }
+            ];
+        }
+
+        // 7. Validate and apply date filters
+        const dateRegex = /^\d{4}-\d{2}-\d{2}$/;
+
+        const parseDate = (value) => {
+            if (!dateRegex.test(value)) return null;
+
+            const date = new Date(`${value}T00:00:00.000Z`);
+
+            if (
+                Number.isNaN(date.getTime()) ||
+                date.toISOString().slice(0, 10) !== value
+            ) {
+                return null;
+            }
+
+            return date;
+        };
+
+        if (startDate || endDate) {
+            const dateFilter = {};
+
+            if (startDate) {
+                const start = parseDate(startDate);
+
+                if (!start) {
+                    const error = new Error(
+                        "Invalid startDate. Use YYYY-MM-DD format"
+                    );
+                    error.statusCode = 400;
+                    throw error;
+                }
+
+                dateFilter.$gte = start;
+            }
+
+            if (endDate) {
+                const end = parseDate(endDate);
+
+                if (!end) {
+                    const error = new Error(
+                        "Invalid endDate. Use YYYY-MM-DD format"
+                    );
+                    error.statusCode = 400;
+                    throw error;
+                }
+
+                // Include the entire end date
+                end.setUTCDate(end.getUTCDate() + 1);
+                dateFilter.$lt = end;
+            }
+
+            if (
+                dateFilter.$gte &&
+                dateFilter.$lt &&
+                dateFilter.$gte >= dateFilter.$lt
+            ) {
+                const error = new Error(
+                    "startDate must be before or equal to endDate"
+                );
+                error.statusCode = 400;
+                throw error;
+            }
+
+            filters.createdAt = dateFilter;
+        }
+
+        // 8. Calculate pagination
         const skip = (pageNumber - 1) * pageSize;
 
-        // 7. Fetch incidents and total matching records
+        // 9. Fetch filtered incidents and total count
         const [incidents, totalIncidents] = await Promise.all([
             Incident.find(filters)
                 .sort({ [sortBy]: order === "asc" ? 1 : -1 })
@@ -131,7 +223,7 @@ const getIncidents = async (req, res, next) => {
             Incident.countDocuments(filters)
         ]);
 
-        // 8. Calculate pagination metadata
+        // 10. Calculate pagination metadata
         const totalPages = Math.ceil(totalIncidents / pageSize);
 
         return sendResponse(
@@ -152,6 +244,33 @@ const getIncidents = async (req, res, next) => {
         );
 
     } catch (error) {
+        next(error);
+    }
+};
+
+const getIncidentById = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+        const incident = await Incident.findById(id);
+
+        if (!incident) {
+            const error = new Error("Incident not found");
+            error.statusCode = 404;
+            throw error;
+        }
+
+        if (req.user.role !== "admin" && incident.createdBy?.toString() !== req.user.userId) {
+            const error = new Error("You are not authorized to access this incident");
+            error.statusCode = 403;
+            throw error;
+        }
+
+        return sendResponse(res, 200, "Incident fetched successfully", incident);
+    } catch (error) {
+        if (error.name === "CastError") {
+            error.statusCode = 400;
+            error.message = "Invalid incident ID";
+        }
         next(error);
     }
 };
