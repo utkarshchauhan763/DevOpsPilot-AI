@@ -2,7 +2,25 @@ const sendResponse = require("../utils/response");
 const Incident = require("../models/incident.model");
 const createIncident = async(req,res,next) => {
     try{
-        const incident = await Incident.create(req.body);
+          const {
+            title,
+            description,
+            service,
+            severity,
+            status,
+            logs
+        } = req.body;
+
+         const incident = await Incident.create({
+            title,
+            description,
+            service,
+            severity,
+            status,
+            logs,
+            createdBy: req.user.userId
+        });
+
         return sendResponse(
             res,
             201,
@@ -35,6 +53,9 @@ const getIncidents = async(req,res,next) => {
             throw error;
         }
         const filters = {};
+        if(req.user.role !== "admin"){
+            filters.createBy = req.user.userId;
+        }
         if(severity) filters.severity = severity;
 
         if(status) filters.status = status;
@@ -60,13 +81,20 @@ const getIncidents = async(req,res,next) => {
 
 const getIncidentById = async(req,res,next) => {
     try{
-        const {id} = res.params;
+        const { id } = req.params;
         const incident = await Incident.findById(id);
         if(!incident){
             const error = new Error("Incident not found");
             error.statusCode = 404;
             throw error;
         }
+        // check incident ownership
+        if(req.user.role !== "admin" && incident.createdBy?.toString() !== req.user.userId){
+            const error = new Error("You are not authorized to access this incident");
+            error.statusCode = 403;
+            throw error;
+        }
+
         return sendResponse(res,200,"Incident fetched successfully",incident);
     }
     catch(error){
@@ -78,46 +106,76 @@ const getIncidentById = async(req,res,next) => {
     }
 }
 
-const updateIncident = async(req,res,next) => {
-    try{
-        const {id} = req.params;
-        const allowedFields = ["title","description","service","severity","status","logs"];
-        const updateData = [];
-        for(const field of allowedFields){
-            if(Object.hasOwn(req.body,field)){
+const updateIncident = async (req, res, next) => {
+    try {
+        const { id } = req.params;
+
+        const allowedFields = [
+            "title",
+            "description",
+            "service",
+            "severity",
+            "status",
+            "logs"
+        ];
+
+        const updateData = {};
+
+        for (const field of allowedFields) {
+            if (Object.hasOwn(req.body, field)) {
                 updateData[field] = req.body[field];
             }
         }
-        if(Object.keys(updateData).length === 0){
+
+        if (Object.keys(updateData).length === 0) {
             const error = new Error("No valid fields provided for update");
             error.statusCode = 400;
             throw error;
         }
 
-        const incident = await Incident.findByIdAndUpdate(
-            id,
-            updateData,
-            {
-                new: true,
-                runValidators:true
-            }
-        );
-        if(!incident){
+        // Find incident
+        const incident = await Incident.findById(id);
+
+        if (!incident) {
             const error = new Error("Incident not found");
             error.statusCode = 404;
             throw error;
         }
-        return sendResponse(res,200,"Incident updated successfully",incident);
-    }
-    catch(error){
-        if(error.name === "CastError"){
+
+        // Verify ownership
+        if (
+            req.user.role !== "admin" &&
+            incident.createdBy?.toString() !== req.user.userId
+        ) {
+            const error = new Error(
+                "You are not authorized to update this incident"
+            );
+            error.statusCode = 403;
+            throw error;
+        }
+
+        // Apply permitted updates
+        Object.assign(incident, updateData);
+
+        await incident.save();
+
+        return sendResponse(
+            res,
+            200,
+            "Incident updated successfully",
+            incident
+        );
+
+    } catch (error) {
+        if (error.name === "CastError") {
             error.statusCode = 400;
             error.message = "Invalid incident ID";
         }
-        if(error.name === "ValidationError"){
-            error.statusCode = 400;
 
+        if (error.name === "ValidationError") {
+            error.statusCode = 400;
         }
+
         next(error);
     }
 };
@@ -131,7 +189,15 @@ const deleteIncident = async(req,res,next) => {
             error.statusCode = 404;
             throw error;
         }
-        return sendRequest(res,200,"Incident deleted successfully",incident);
+        if(req.user.role !== "admin" && incident.createdBy?.toString() !== req.user.userId){
+            const error = new Error(
+                "You are not authorized to delete this incident"
+            );
+            error.statusCode = 403;
+            throw error;
+        }
+        await Incident.findByIdAndDelete(id);
+        return sendResponse(res,200,"Incident deleted successfully",incident);
 
     }catch(error){
         if(error.name === "CastError"){
