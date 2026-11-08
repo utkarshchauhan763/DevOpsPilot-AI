@@ -1,4 +1,6 @@
+
 const mongoose = require("mongoose");
+
 const incidentSchema = new mongoose.Schema(
     {
         title: {
@@ -13,24 +15,34 @@ const incidentSchema = new mongoose.Schema(
         },
         service: {
             type: String,
-            enum: ["low","medium","high","critical"],
+            required: true,
+            trim: true
+        },
+        severity: {
+            type: String,
+            enum: ["low", "medium", "high", "critical"],
             default: "medium"
         },
-        status:{
+        status: {
             type: String,
-            enum: ["open","investigating","resolved"],
+            enum: ["open", "investigating", "resolved"],
             default: "open"
         },
         logs: {
             type: String,
             default: ""
+        },
+        createdBy: {
+            type: mongoose.Schema.Types.ObjectId,
+            ref: "User",
+            required: true
         }
-
     },
     {
         timestamps: true
     }
 );
 
-const Incident = mongoose.model("Incident",incidentSchema);
+const Incident = mongoose.model("Incident", incidentSchema);
+
 module.exports = Incident;
