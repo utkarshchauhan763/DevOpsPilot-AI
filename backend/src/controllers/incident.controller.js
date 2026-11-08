@@ -35,76 +35,126 @@ const createIncident = async(req,res,next) => {
     }
 };
 
-const getIncidents = async(req,res,next) => {
-    try{
-        const{ severity,status,service } = req.query;
-        const allowedSeverities = ["low","medium","high","critical"];
-        if(severity && !allowedSeverities.includes(severity)){
+
+const getIncidents = async (req, res, next) => {
+    try {
+        const {
+            severity,
+            status,
+            service,
+            page = 1,
+            limit = 10,
+            sortBy = "createdAt",
+            order = "desc"
+        } = req.query;
+
+        // 1. Validate severity
+        const allowedSeverities = ["low", "medium", "high", "critical"];
+
+        if (severity && !allowedSeverities.includes(severity)) {
             const error = new Error("Invalid incident severity");
             error.statusCode = 400;
             throw error;
         }
-        const allowedStatuses = [
-            "open","investigating","resolved"
-        ];
-        if(status && !allowedStatuses.includes(status)){
+
+        // 2. Validate status
+        const allowedStatuses = ["open", "investigating", "resolved"];
+
+        if (status && !allowedStatuses.includes(status)) {
             const error = new Error("Invalid incident status");
             error.statusCode = 400;
             throw error;
         }
-        const filters = {};
-        if(req.user.role !== "admin"){
-            filters.createBy = req.user.userId;
-        }
-        if(severity) filters.severity = severity;
 
-        if(status) filters.status = status;
-        if(service){
+        // 3. Validate pagination
+        const pageNumber = Number(page);
+        const pageSize = Number(limit);
+
+        if (
+            !Number.isInteger(pageNumber) ||
+            !Number.isInteger(pageSize) ||
+            pageNumber < 1 ||
+            pageSize < 1 ||
+            pageSize > 100
+        ) {
+            const error = new Error(
+                "Page must be a positive integer and limit must be between 1 and 100"
+            );
+            error.statusCode = 400;
+            throw error;
+        }
+
+        // 4. Validate sorting
+        const allowedSortFields = ["createdAt", "updatedAt", "severity", "title"];
+        const allowedOrders = ["asc", "desc"];
+
+        if (!allowedSortFields.includes(sortBy)) {
+            const error = new Error("Invalid sorting field");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        if (!allowedOrders.includes(order)) {
+            const error = new Error("Invalid sorting order");
+            error.statusCode = 400;
+            throw error;
+        }
+
+        // 5. Build filters
+        const filters = {};
+
+        // Normal users can only see their own incidents
+        if (req.user.role !== "admin") {
+            filters.createdBy = req.user.userId;
+        }
+
+        if (severity) filters.severity = severity;
+        if (status) filters.status = status;
+
+        if (service) {
             filters.service = {
                 $regex: service,
                 $options: "i"
             };
         }
-        
-        // Retrieve incidents from MongoDB
-        const incidents = await Incident.find(filters)
-            .sort({ createdAt: -1 });
 
-        return sendResponse(res,200,"Incidents fetched successfully",{
-            total: incidents.length,
-            incidents
-        });
-    }catch(error){
+        // 6. Calculate pagination
+        const skip = (pageNumber - 1) * pageSize;
+
+        // 7. Fetch incidents and total matching records
+        const [incidents, totalIncidents] = await Promise.all([
+            Incident.find(filters)
+                .sort({ [sortBy]: order === "asc" ? 1 : -1 })
+                .skip(skip)
+                .limit(pageSize),
+
+            Incident.countDocuments(filters)
+        ]);
+
+        // 8. Calculate pagination metadata
+        const totalPages = Math.ceil(totalIncidents / pageSize);
+
+        return sendResponse(
+            res,
+            200,
+            "Incidents fetched successfully",
+            {
+                pagination: {
+                    totalIncidents,
+                    totalPages,
+                    currentPage: pageNumber,
+                    pageSize,
+                    hasNextPage: pageNumber < totalPages,
+                    hasPreviousPage: pageNumber > 1
+                },
+                incidents
+            }
+        );
+
+    } catch (error) {
         next(error);
     }
 };
-
-const getIncidentById = async(req,res,next) => {
-    try{
-        const { id } = req.params;
-        const incident = await Incident.findById(id);
-        if(!incident){
-            const error = new Error("Incident not found");
-            error.statusCode = 404;
-            throw error;
-        }
-        // check incident ownership
-        if(req.user.role !== "admin" && incident.createdBy?.toString() !== req.user.userId){
-            const error = new Error("You are not authorized to access this incident");
-            error.statusCode = 403;
-            throw error;
-        }
-
-        return sendResponse(res,200,"Incident fetched successfully",incident);
-    }
-    catch(error){
-        if(error.name === "CastError"){
-            error.statusCode = 400;
-            error.message = "Invalid incident ID";
-        }
-        next(error);
-    }
-}
 
 const updateIncident = async (req, res, next) => {
     try {
