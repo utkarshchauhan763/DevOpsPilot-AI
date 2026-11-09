@@ -5,7 +5,8 @@ const {
     getIncidents,
     getIncidentById,
     updateIncident,
-    deleteIncident
+    deleteIncident,
+    getIncidentAnalysis
 } = require("../controllers/incident.controller");
 
 const { protect } = require("../middleware/auth.middleware");
@@ -17,5 +18,6 @@ router.get("/", protect, getIncidents);
 router.get("/:id", protect, getIncidentById);
 router.patch("/:id", protect, updateIncident);
 router.delete("/:id", protect, deleteIncident);
+router.get("/:id/analysis",protect,getIncidentAnalysis);
 
 module.exports = router;

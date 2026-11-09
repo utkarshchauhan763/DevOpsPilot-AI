@@ -36,7 +36,44 @@ const incidentSchema = new mongoose.Schema(
             type: mongoose.Schema.Types.ObjectId,
             ref: "User",
             required: true
+        },
+
+        aiAnalysis: {
+            rootCause: {
+                type: String,
+                default: ""
+            },
+            impact: {
+                type: String,
+                default: ""
+            },
+            troubleshootingSteps: {
+                type: [String],
+                default: []
+            },
+            prevention: {
+                type: [String],
+                default: []
+            }
+        },
+
+        analysisStatus: {
+            type: String,
+            enum: ["pending", "processing", "completed", "failed"],
+            default: "pending"
+        },
+
+        analysisError: {
+            type: String,
+            default: ""
+        },
+
+        analysisCompletedAt: {
+            type: Date,
+            default: null
         }
+
+
     },
     {
         timestamps: true

@@ -1,5 +1,7 @@
 const sendResponse = require("../utils/response");
 const Incident = require("../models/incident.model");
+const incidentQueue = require("../queues/incident.queue");
+
 const createIncident = async(req,res,next) => {
     try{
           const {
@@ -21,11 +23,39 @@ const createIncident = async(req,res,next) => {
             createdBy: req.user.userId
         });
 
+        let analysisJob = null;
+        try{
+            analysisJob = await incidentQueue.add("analyze-incident",{
+                incidentId: incident._id.toString(),
+                title: incident.title,
+                service: incident.service,
+                severity: incident.severity
+            },
+            {
+                jobId: `incident-${incident._id}`
+            }
+        );
+        console.log(`Analysis job added for incident: ${incident._id}`);
+        }
+        catch(queueError){
+            console.error(
+                "Failed to queue incident analysis:",
+                queueError.message
+            );
+        }
+
         return sendResponse(
             res,
             201,
-            "Incident created successfully",
-            incident
+            analysisJob ?
+            "Incident created and analysis job queued successfully" : "Incident created, but analysis job could not be queued",
+           {
+            incident,
+            analysis: {
+                status: analysisJob ? "queued": "queue_failed",
+                jobId: analysisJob?.id || null
+            }
+           }
         );
     }catch(error){
         if(error.name === "ValidationError"){
@@ -376,6 +406,30 @@ const deleteIncident = async(req,res,next) => {
         next(error);
     }
 };
+
+const getIncidentAnalysis = async(req,res,next) => {
+    try{
+        const incident = await Incident.findById(req.params.id);
+        if(!incident){
+            return sendResponse(res, 404, "Incident not found", null);
+        }
+        if(req.user.role !== "admin" && incident.createdBy?.toString() !== req.user.userId){
+            return sendResponse(res, 403, "You are not authorized to access this incident");
+        }
+        return sendResponse(res, 200, "Incident AI analysis fetched successfully",
+            {
+                incidentId: incident._id,
+                analysisStatus: incident.analysisStatus,
+                aiAnalysis: incident.aiAnalysis,
+                analysisError: incident.analysisError,
+                analysisCompletedAt: incident.analysisCompletedAt
+            }
+        );
+    }
+    catch(error){
+        next(error);
+    }
+};
 module.exports = {
-    createIncident,getIncidents,getIncidentById,updateIncident,deleteIncident
+    createIncident,getIncidents,getIncidentById,updateIncident,deleteIncident,getIncidentAnalysis
 };
