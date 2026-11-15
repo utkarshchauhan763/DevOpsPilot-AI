@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Docker runtime environment files
+backend/.docker-runtime.env
+backend/.incident-worker.env
+
+# Build files
+dist/
+build/
+coverage/
+
+# Logs
+*.log
+
+# Operating system
+.DS_Store
+Thumbs.db
