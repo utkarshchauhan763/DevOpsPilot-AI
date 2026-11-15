@@ -1,27 +1,34 @@
+
 const { Worker } = require("bullmq");
 const { redis, connectRedis } = require("../config/redis");
 const connectDB = require("../config/database");
 const Incident = require("../models/incident.model");
 const { analyzeIncident } = require("../services/ollama.service");
 
-const processIncident = async(job) => {
+const HEARTBEAT_KEY = "devopspilot:incident-worker:heartbeat";
+const HEARTBEAT_INTERVAL = 10000;
+
+const processIncident = async (job) => {
     console.log("-------------");
     console.log("Processing incident job....");
-    console.log("Job ID:",job.id);
+    console.log("Job ID:", job.id);
     console.log("Job Name:", job.name);
-   
+
     const { incidentId } = job.data;
     const incident = await Incident.findById(incidentId);
-    if(!incident){
+
+    if (!incident) {
         throw new Error(`Incident not found: ${incidentId}`);
-    } 
+    }
 
     console.log("Incident retrieved successfully");
     incident.analysisStatus = "processing";
     incident.analysisError = "";
     await incident.save();
-    try{
+
+    try {
         console.log("Starting AI incident analysis....");
+
         const aiResult = await analyzeIncident({
             title: incident.title,
             description: incident.description,
@@ -29,11 +36,12 @@ const processIncident = async(job) => {
             severity: incident.severity,
             logs: incident.logs
         });
+
         incident.aiAnalysis = aiResult.analysis;
         incident.analysisStatus = "completed";
         incident.analysisError = "";
         incident.analysisCompletedAt = new Date();
-        
+
         await incident.save();
 
         console.log("AI analysis saved successfully in MongoDB");
@@ -41,37 +49,37 @@ const processIncident = async(job) => {
         console.log(aiResult.analysis);
         console.log("-----------------------");
 
-        return{
+        return {
             success: true,
             incidentId: incident._id.toString(),
             analysis: aiResult.analysis,
             analysisStatus: incident.analysisStatus,
             processedAt: incident.analysisCompletedAt
-        }
+        };
 
-
-    }
-    catch(error){
+    } catch (error) {
         incident.analysisStatus = "failed";
         incident.analysisError = error.message;
 
         await incident.save();
 
         console.error("AI analysis failed:", error.message);
-
-        // Throwing allows BullMQ to retry the job
         throw error;
     }
 };
 
-const startIncidentWorker = async() =>{
+const startIncidentWorker = async () => {
     await connectDB();
     await connectRedis();
 
-    const incidentWorker = new Worker("incident-analysis", processIncident, {
-        connection: redis,
-        concurrency: 5
-    });
+    const incidentWorker = new Worker(
+        "incident-analysis",
+        processIncident,
+        {
+            connection: redis,
+            concurrency: 5
+        }
+    );
 
     incidentWorker.on("completed", (job, result) => {
         console.log(`Job ${job.id} completed successfully`);
@@ -86,13 +94,34 @@ const startIncidentWorker = async() =>{
         console.error("Worker error:", error.message);
     });
 
+    await incidentWorker.waitUntilReady();
+
+    const updateHeartbeat = async () => {
+        await redis.set(
+            HEARTBEAT_KEY,
+            Date.now().toString(),
+            "EX",
+            30
+        );
+    };
+
+    await updateHeartbeat();
+
+    const heartbeatTimer = setInterval(() => {
+        updateHeartbeat().catch((error) => {
+            console.error("Heartbeat update failed:", error.message);
+        });
+    }, HEARTBEAT_INTERVAL);
+
+    heartbeatTimer.unref();
+
     console.log("Incident Worker is running");
+    console.log("Worker heartbeat monitoring is active");
 
     return incidentWorker;
 };
 
-startIncidentWorker().catch((error)=>{
-    console.log("failed to start Incident Worker:",error.message);
+startIncidentWorker().catch((error) => {
+    console.error("Failed to start Incident Worker:", error.message);
     process.exit(1);
 });
-
